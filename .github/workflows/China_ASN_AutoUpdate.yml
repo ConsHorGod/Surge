@@ -24,13 +24,15 @@ jobs:
         run: |
           set -e
 
+          mkdir -p RULESET
+
           python3 - <<'PY'
           import re
           import requests
           from bs4 import BeautifulSoup
 
           URL = "https://bgp.he.net/country/CN"
-          OUTPUT = "China_ASN.list"
+          OUTPUT = "RULESET/China_ASN.list"
 
           headers = {
               "User-Agent": (
@@ -104,20 +106,20 @@ jobs:
       - name: Show result
         run: |
           echo "===== China ASN ====="
-          wc -l China_ASN.list
+          wc -l RULESET/China_ASN.list
           echo
-          head -20 China_ASN.list
+          head -20 RULESET/China_ASN.list
           echo
           echo "..."
           echo
-          tail -20 China_ASN.list
+          tail -20 RULESET/China_ASN.list
 
       - name: Commit and push
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-          git add China_ASN.list
+          git add RULESET/China_ASN.list
 
           if git diff --cached --quiet; then
             echo "No changes detected."
