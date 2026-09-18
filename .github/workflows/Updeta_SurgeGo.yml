@@ -43,6 +43,7 @@ jobs:
               ],
               "119.29.29.29": [
                   "https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/master/rule/Surge/Tencent/Tencent.list",
+                  "https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/master/rule/Surge/WeChat/WeChat.list",
                   "https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/master/rule/Surge/JingDong/JingDong.list",
                   "https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/master/rule/Surge/MeiTuan/MeiTuan.list",
               ],
@@ -130,40 +131,33 @@ jobs:
                   if x and "." in x
               }
 
-              # 只保留最顶层、最核心的后缀
               core = set()
 
               for suffix in sorted(
                   suffixes,
                   key=lambda x: (x.count("."), len(x))
               ):
-                  covered = False
+                  if any(
+                      is_subdomain(suffix, parent)
+                      for parent in core
+                  ):
+                      continue
 
-                  for parent in core:
-                      if is_subdomain(suffix, parent):
-                          covered = True
-                          break
+                  core.add(suffix)
 
-                  if not covered:
-                      core.add(suffix)
+              result = {
+                  "*." + suffix
+                  for suffix in core
+              }
 
-              result = set()
-
-              # DOMAIN-SUFFIX → Surge Host 通配后缀
-              for suffix in core:
-                  result.add("*." + suffix)
-
-              # 只有没有被核心后缀覆盖的 DOMAIN 才保留
               for domain in domains:
-                  covered = False
+                  if any(
+                      is_subdomain(domain, suffix)
+                      for suffix in core
+                  ):
+                      continue
 
-                  for suffix in core:
-                      if is_subdomain(domain, suffix):
-                          covered = True
-                          break
-
-                  if not covered:
-                      result.add(domain)
+                  result.add(domain)
 
               return sorted(
                   result,
@@ -183,7 +177,10 @@ jobs:
               ):
                   return None
 
-              return line.split("=", 1)[0].strip().lower()
+              return line.split(
+                  "=",
+                  1
+              )[0].strip().lower()
 
           text = FILE.read_text(encoding="utf-8")
           lines = text.splitlines()
@@ -243,7 +240,9 @@ jobs:
               for url in urls:
                   try:
                       content = download(url)
+
                       s, d = parse_rules(content)
+
                       suffixes.update(s)
                       domains.update(d)
 
@@ -257,12 +256,10 @@ jobs:
                       print(f"FAILED: {url}")
                       print(e)
 
-              minimized = minimize(
+              generated_by_dns[dns] = minimize(
                   suffixes,
                   domains
               )
-
-              generated_by_dns[dns] = minimized
 
           total = sum(
               len(v)
@@ -288,7 +285,6 @@ jobs:
                   f"{domain} = server:syslib"
               )
 
-          # 去重
           unique_generated = []
           seen = set()
 
@@ -304,7 +300,6 @@ jobs:
               seen.add(domain)
               unique_generated.append(line)
 
-          # 重建 [Host]
           new_host = []
 
           for line in comments:
@@ -317,7 +312,6 @@ jobs:
 
           new_host.extend(unique_generated)
 
-          # 必须最后
           new_host.append(
               "*.cn = server:syslib"
           )
@@ -330,7 +324,6 @@ jobs:
 
           text = "\n".join(lines) + "\n"
 
-          # 更新 always-real-ip
           match = re.search(
               r"(?mi)^always-real-ip\s*=\s*(.*)$",
               text
@@ -348,10 +341,10 @@ jobs:
                       continue
 
                   domain = item.split(
-                      "//", 1
+                      "//",
+                      1
                   )[0].strip().lower()
 
-                  # 删除上一轮自动生成的域名
                   if domain in old_auto_host:
                       continue
 
