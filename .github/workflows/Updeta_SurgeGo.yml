@@ -21,6 +21,7 @@ jobs:
           python3 - <<'PY'
           from pathlib import Path
           import re
+          import urllib.request
 
           FILE = Path("SurgeGo.conf")
 
@@ -34,52 +35,23 @@ jobs:
               "*.wicp.net",
           }
 
-          GROUPS = {
+          SOURCES = {
               "223.5.5.5": [
-                  "alipay.com",
-                  "*.alipay.com",
-                  "taobao.com",
-                  "*.taobao.com",
-                  "tmall.com",
-                  "*.tmall.com",
-                  "1688.com",
-                  "*.1688.com",
-                  "aliyun.com",
-                  "*.aliyun.com",
-                  "alibabacloud.com",
-                  "*.alibabacloud.com",
-                  "ele.me",
-                  "*.ele.me",
+                  "https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/master/rule/Surge/Alibaba/Alibaba.list",
+                  "https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/master/rule/Surge/AliPay/AliPay.list",
+                  "https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/master/rule/Surge/Eleme/Eleme.list",
               ],
               "119.29.29.29": [
-                  "qq.com",
-                  "*.qq.com",
-                  "wechat.com",
-                  "*.wechat.com",
-                  "weixin.qq.com",
-                  "*.weixin.qq.com",
-                  "jd.com",
-                  "*.jd.com",
-                  "meituan.com",
-                  "*.meituan.com",
-                  "dianping.com",
-                  "*.dianping.com",
+                  "https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/master/rule/Surge/Tencent/Tencent.list",
+                  "https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/master/rule/Surge/JingDong/JingDong.list",
+                  "https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/master/rule/Surge/MeiTuan/MeiTuan.list",
               ],
               "server:syslib": [
-                  "apple.com",
-                  "*.apple.com",
-                  "icloud.com",
-                  "*.icloud.com",
-                  "mzstatic.com",
-                  "*.mzstatic.com",
-                  "douyin.com",
-                  "*.douyin.com",
-                  "kuaishou.com",
-                  "*.kuaishou.com",
-                  "xiaohongshu.com",
-                  "*.xiaohongshu.com",
-                  "95516.com",
-                  "*.95516.com",
+                  "https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/master/rule/Surge/Apple/Apple.list",
+                  "https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/master/rule/Surge/DouYin/DouYin.list",
+                  "https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/master/rule/Surge/Kuaishou/Kuaishou.list",
+                  "https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/master/rule/Surge/XiaoHongShu/XiaoHongShu.list",
+                  "https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/master/rule/Surge/UnionPay/UnionPay.list",
               ],
           }
 
@@ -90,13 +62,109 @@ jobs:
               "time.*.com",
           ]
 
+          def download(url):
+              req = urllib.request.Request(
+                  url,
+                  headers={"User-Agent": "Mozilla/5.0"}
+              )
+              with urllib.request.urlopen(req, timeout=30) as r:
+                  return r.read().decode("utf-8", errors="ignore")
+
+          def extract_domains(text):
+              result = set()
+
+              for raw in text.splitlines():
+                  line = raw.strip()
+
+                  if not line or line.startswith("#"):
+                      continue
+
+                  parts = [x.strip() for x in line.split(",")]
+
+                  if len(parts) < 2:
+                      continue
+
+                  rule_type = parts[0].upper()
+                  domain = parts[1].lower()
+
+                  if rule_type not in {"DOMAIN", "DOMAIN-SUFFIX"}:
+                      continue
+
+                  if not domain or "/" in domain:
+                      continue
+
+                  if domain.startswith("."):
+                      domain = "*" + domain
+
+                  if "*" in domain and not domain.startswith("*."):
+                      continue
+
+                  result.add(domain)
+
+              return result
+
+          def base_domain(domain):
+              if domain.startswith("*."):
+                  domain = domain[2:]
+
+              parts = domain.split(".")
+
+              if len(parts) < 2:
+                  return domain
+
+              return ".".join(parts[-2:])
+
+          def compact_domains(domains):
+              domains = {
+                  d.lower()
+                  for d in domains
+                  if d and d not in FIXED and d != "*.cn"
+              }
+
+              exact = {
+                  d for d in domains
+                  if not d.startswith("*.")
+              }
+
+              wildcards = {
+                  d[2:] for d in domains
+                  if d.startswith("*.")
+              }
+
+              result = set()
+
+              for domain in exact:
+                  parts = domain.split(".")
+
+                  covered = False
+
+                  for i in range(len(parts) - 1):
+                      suffix = ".".join(parts[i + 1:])
+
+                      if suffix in wildcards:
+                          covered = True
+                          break
+
+                  if not covered:
+                      result.add(domain)
+
+              result.update(
+                  "*" + "." + d
+                  for d in wildcards
+              )
+
+              return sorted(result)
+
           text = FILE.read_text(encoding="utf-8")
           lines = text.splitlines()
 
-          host_start = next(
-              i for i, line in enumerate(lines)
-              if line.strip().lower() == "[host]"
-          )
+          try:
+              host_start = next(
+                  i for i, line in enumerate(lines)
+                  if line.strip().lower() == "[host]"
+              )
+          except StopIteration:
+              raise RuntimeError("[Host] 不存在")
 
           section_end = len(lines)
 
@@ -107,7 +175,7 @@ jobs:
 
           old_host = lines[host_start + 1:section_end]
 
-          def domain_from_host_line(line):
+          def get_domain(line):
               s = line.strip()
 
               if not s or s.startswith("#") or "=" not in s:
@@ -118,13 +186,13 @@ jobs:
           old_auto_host = set()
 
           for line in old_host:
-              domain = domain_from_host_line(line)
+              domain = get_domain(line)
 
               if domain and domain not in FIXED and domain != "*.cn":
                   old_auto_host.add(domain)
 
-          fixed_lines = []
           comments = []
+          fixed_lines = []
 
           for line in old_host:
               s = line.strip()
@@ -136,31 +204,41 @@ jobs:
                   comments.append(line)
                   continue
 
-              domain = domain_from_host_line(line)
+              domain = get_domain(line)
 
               if domain in FIXED:
                   fixed_lines.append(line)
 
+          generated_by_dns = {}
+
+          for dns, urls in SOURCES.items():
+              domains = set()
+
+              for url in urls:
+                  try:
+                      content = download(url)
+                      domains.update(extract_domains(content))
+                  except Exception as e:
+                      print(f"跳过: {url}")
+                      print(e)
+
+              domains = compact_domains(domains)
+
+              generated_by_dns[dns] = domains
+
           generated = []
 
-          for dns, domains in GROUPS.items():
+          for dns, domains in generated_by_dns.items():
               for domain in domains:
                   generated.append(f"{domain} = {dns}")
 
           for domain in NTP:
               generated.append(f"{domain} = server:syslib")
 
-          seen = set()
-          generated_unique = []
-
-          for line in generated:
-              domain = domain_from_host_line(line)
-
-              if not domain or domain in seen:
-                  continue
-
-              seen.add(domain)
-              generated_unique.append(line)
+          if not generated:
+              raise RuntimeError(
+                  "没有抓取到有效域名，停止更新"
+              )
 
           new_host = []
 
@@ -172,10 +250,15 @@ jobs:
               if line.strip():
                   new_host.append(line)
 
-          new_host.extend(generated_unique)
+          new_host.extend(generated)
           new_host.append("*.cn = server:syslib")
 
-          lines = lines[:host_start + 1] + new_host + lines[section_end:]
+          lines = (
+              lines[:host_start + 1]
+              + new_host
+              + lines[section_end:]
+          )
+
           text = "\n".join(lines) + "\n"
 
           match = re.search(
@@ -186,15 +269,14 @@ jobs:
           if match:
               old_value = match.group(1).strip()
 
-              items = [
-                  x.strip()
-                  for x in old_value.split(",")
-                  if x.strip()
-              ]
-
               manual = []
 
-              for item in items:
+              for item in old_value.split(","):
+                  item = item.strip()
+
+                  if not item:
+                      continue
+
                   domain = item.split("//", 1)[0].strip().lower()
 
                   if domain in old_auto_host:
@@ -211,8 +293,8 @@ jobs:
 
               auto_real_ip = []
 
-              for line in generated_unique:
-                  domain = domain_from_host_line(line)
+              for line in generated:
+                  domain = get_domain(line)
 
                   if domain:
                       auto_real_ip.append(domain)
@@ -220,7 +302,11 @@ jobs:
               result = []
               seen = set()
 
-              for item in ["%INSERT%", "*.lan", "*.cn"] + manual + auto_real_ip:
+              for item in (
+                  ["%INSERT%", "*.lan", "*.cn"]
+                  + manual
+                  + auto_real_ip
+              ):
                   key = item.lower()
 
                   if key in seen:
@@ -233,10 +319,16 @@ jobs:
                   r"(?mi)^always-real-ip\s*=\s*.*$",
                   "always-real-ip = " + ", ".join(result),
                   text,
-                  count=1,
+                  count=1
               )
 
           FILE.write_text(text, encoding="utf-8")
+
+          total = sum(
+              len(v) for v in generated_by_dns.values()
+          )
+
+          print(f"动态抓取并整理完成，共 {total} 个域名")
           PY
 
       - name: Commit changes
