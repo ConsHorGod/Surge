@@ -67,11 +67,15 @@ jobs:
                   url,
                   headers={"User-Agent": "Mozilla/5.0"}
               )
-              with urllib.request.urlopen(req, timeout=30) as r:
-                  return r.read().decode("utf-8", errors="ignore")
+              with urllib.request.urlopen(req, timeout=30) as response:
+                  return response.read().decode(
+                      "utf-8",
+                      errors="ignore"
+                  )
 
-          def extract_domains(text):
-              result = set()
+          def parse_rules(text):
+              suffixes = set()
+              domains = set()
 
               for raw in text.splitlines():
                   line = raw.strip()
@@ -85,75 +89,101 @@ jobs:
                       continue
 
                   rule_type = parts[0].upper()
-                  domain = parts[1].lower()
+                  value = parts[1].lower().strip()
 
-                  if rule_type not in {"DOMAIN", "DOMAIN-SUFFIX"}:
-                      continue
+                  if rule_type == "DOMAIN-SUFFIX":
+                      if (
+                          value
+                          and "*" not in value
+                          and "/" not in value
+                          and "." in value
+                      ):
+                          suffixes.add(value)
 
-                  if not domain or "/" in domain:
-                      continue
+                  elif rule_type == "DOMAIN":
+                      if (
+                          value
+                          and "*" not in value
+                          and "/" not in value
+                          and "." in value
+                      ):
+                          domains.add(value)
 
-                  if domain.startswith("."):
-                      domain = "*" + domain
+              return suffixes, domains
 
-                  if "*" in domain and not domain.startswith("*."):
-                      continue
+          def is_subdomain(domain, suffix):
+              return (
+                  domain == suffix
+                  or domain.endswith("." + suffix)
+              )
 
-                  result.add(domain)
+          def minimize(suffixes, domains):
+              suffixes = {
+                  x.lower().lstrip(".")
+                  for x in suffixes
+                  if x and "." in x
+              }
 
-              return result
-
-          def base_domain(domain):
-              if domain.startswith("*."):
-                  domain = domain[2:]
-
-              parts = domain.split(".")
-
-              if len(parts) < 2:
-                  return domain
-
-              return ".".join(parts[-2:])
-
-          def compact_domains(domains):
               domains = {
-                  d.lower()
-                  for d in domains
-                  if d and d not in FIXED and d != "*.cn"
+                  x.lower().lstrip(".")
+                  for x in domains
+                  if x and "." in x
               }
 
-              exact = {
-                  d for d in domains
-                  if not d.startswith("*.")
-              }
+              # 只保留最顶层、最核心的后缀
+              core = set()
 
-              wildcards = {
-                  d[2:] for d in domains
-                  if d.startswith("*.")
-              }
+              for suffix in sorted(
+                  suffixes,
+                  key=lambda x: (x.count("."), len(x))
+              ):
+                  covered = False
+
+                  for parent in core:
+                      if is_subdomain(suffix, parent):
+                          covered = True
+                          break
+
+                  if not covered:
+                      core.add(suffix)
 
               result = set()
 
-              for domain in exact:
-                  parts = domain.split(".")
+              # DOMAIN-SUFFIX → Surge Host 通配后缀
+              for suffix in core:
+                  result.add("*." + suffix)
 
+              # 只有没有被核心后缀覆盖的 DOMAIN 才保留
+              for domain in domains:
                   covered = False
 
-                  for i in range(len(parts) - 1):
-                      suffix = ".".join(parts[i + 1:])
-
-                      if suffix in wildcards:
+                  for suffix in core:
+                      if is_subdomain(domain, suffix):
                           covered = True
                           break
 
                   if not covered:
                       result.add(domain)
 
-              result.update(
-                  "*" + "." + d
-                  for d in wildcards
+              return sorted(
+                  result,
+                  key=lambda x: (
+                      x.count("."),
+                      x.lower()
+                  )
               )
 
-              return sorted(result)
+          def host_domain(line):
+              line = line.strip()
+
+              if (
+                  not line
+                  or line.startswith("#")
+                  or "=" not in line
+              ):
+                  return None
+
+              return line.split("=", 1)[0].strip().lower()
 
           text = FILE.read_text(encoding="utf-8")
           lines = text.splitlines()
@@ -169,77 +199,112 @@ jobs:
           section_end = len(lines)
 
           for i in range(host_start + 1, len(lines)):
-              if re.match(r"^\s*\[[^\]]+\]\s*$", lines[i]):
+              if re.match(
+                  r"^\s*\[[^\]]+\]\s*$",
+                  lines[i]
+              ):
                   section_end = i
                   break
 
-          old_host = lines[host_start + 1:section_end]
-
-          def get_domain(line):
-              s = line.strip()
-
-              if not s or s.startswith("#") or "=" not in s:
-                  return None
-
-              return s.split("=", 1)[0].strip().lower()
+          old_host = lines[
+              host_start + 1:section_end
+          ]
 
           old_auto_host = set()
-
-          for line in old_host:
-              domain = get_domain(line)
-
-              if domain and domain not in FIXED and domain != "*.cn":
-                  old_auto_host.add(domain)
-
           comments = []
           fixed_lines = []
 
           for line in old_host:
-              s = line.strip()
+              stripped = line.strip()
 
-              if not s:
+              if not stripped:
                   continue
 
-              if s.startswith("#"):
+              if stripped.startswith("#"):
                   comments.append(line)
                   continue
 
-              domain = get_domain(line)
+              domain = host_domain(line)
+
+              if not domain:
+                  continue
 
               if domain in FIXED:
                   fixed_lines.append(line)
+              elif domain != "*.cn":
+                  old_auto_host.add(domain)
 
           generated_by_dns = {}
 
           for dns, urls in SOURCES.items():
+              suffixes = set()
               domains = set()
 
               for url in urls:
                   try:
                       content = download(url)
-                      domains.update(extract_domains(content))
+                      s, d = parse_rules(content)
+                      suffixes.update(s)
+                      domains.update(d)
+
+                      print(
+                          f"OK: {url} "
+                          f"suffix={len(s)} "
+                          f"domain={len(d)}"
+                      )
+
                   except Exception as e:
-                      print(f"跳过: {url}")
+                      print(f"FAILED: {url}")
                       print(e)
 
-              domains = compact_domains(domains)
+              minimized = minimize(
+                  suffixes,
+                  domains
+              )
 
-              generated_by_dns[dns] = domains
+              generated_by_dns[dns] = minimized
+
+          total = sum(
+              len(v)
+              for v in generated_by_dns.values()
+          )
+
+          if total == 0:
+              raise RuntimeError(
+                  "没有抓取到有效核心域名，"
+                  "停止更新以保护现有配置"
+              )
 
           generated = []
 
           for dns, domains in generated_by_dns.items():
               for domain in domains:
-                  generated.append(f"{domain} = {dns}")
+                  generated.append(
+                      f"{domain} = {dns}"
+                  )
 
           for domain in NTP:
-              generated.append(f"{domain} = server:syslib")
-
-          if not generated:
-              raise RuntimeError(
-                  "没有抓取到有效域名，停止更新"
+              generated.append(
+                  f"{domain} = server:syslib"
               )
 
+          # 去重
+          unique_generated = []
+          seen = set()
+
+          for line in generated:
+              domain = host_domain(line)
+
+              if not domain:
+                  continue
+
+              if domain in seen:
+                  continue
+
+              seen.add(domain)
+              unique_generated.append(line)
+
+          # 重建 [Host]
           new_host = []
 
           for line in comments:
@@ -250,8 +315,12 @@ jobs:
               if line.strip():
                   new_host.append(line)
 
-          new_host.extend(generated)
-          new_host.append("*.cn = server:syslib")
+          new_host.extend(unique_generated)
+
+          # 必须最后
+          new_host.append(
+              "*.cn = server:syslib"
+          )
 
           lines = (
               lines[:host_start + 1]
@@ -261,6 +330,7 @@ jobs:
 
           text = "\n".join(lines) + "\n"
 
+          # 更新 always-real-ip
           match = re.search(
               r"(?mi)^always-real-ip\s*=\s*(.*)$",
               text
@@ -277,8 +347,11 @@ jobs:
                   if not item:
                       continue
 
-                  domain = item.split("//", 1)[0].strip().lower()
+                  domain = item.split(
+                      "//", 1
+                  )[0].strip().lower()
 
+                  # 删除上一轮自动生成的域名
                   if domain in old_auto_host:
                       continue
 
@@ -291,13 +364,13 @@ jobs:
 
                   manual.append(item)
 
-              auto_real_ip = []
+              auto = []
 
-              for line in generated:
-                  domain = get_domain(line)
+              for line in unique_generated:
+                  domain = host_domain(line)
 
                   if domain:
-                      auto_real_ip.append(domain)
+                      auto.append(domain)
 
               result = []
               seen = set()
@@ -305,7 +378,7 @@ jobs:
               for item in (
                   ["%INSERT%", "*.lan", "*.cn"]
                   + manual
-                  + auto_real_ip
+                  + auto
               ):
                   key = item.lower()
 
@@ -317,18 +390,23 @@ jobs:
 
               text = re.sub(
                   r"(?mi)^always-real-ip\s*=\s*.*$",
-                  "always-real-ip = " + ", ".join(result),
+                  "always-real-ip = "
+                  + ", ".join(result),
                   text,
                   count=1
               )
 
-          FILE.write_text(text, encoding="utf-8")
-
-          total = sum(
-              len(v) for v in generated_by_dns.values()
+          FILE.write_text(
+              text,
+              encoding="utf-8"
           )
 
-          print(f"动态抓取并整理完成，共 {total} 个域名")
+          print()
+          print("================================")
+          print("SurgeGo 更新完成")
+          print("核心自动域名:", total)
+          print("最终 Host 自动项:", len(unique_generated))
+          print("================================")
           PY
 
       - name: Commit changes
