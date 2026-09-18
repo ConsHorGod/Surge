@@ -1,4 +1,4 @@
-name: Update Surge [Host]&[aways_real_ip]
+name: Update SurgeGo
 
 on:
   schedule:
@@ -18,316 +18,558 @@ jobs:
 
       - name: Update SurgeGo.conf
         run: |
-          python3 <<'PY'
-          from pathlib import Path
+          set -e
+
+          python3 - <<'PY'
           import re
+          import requests
+          from pathlib import Path
 
           FILE = Path("SurgeGo.conf")
+
+          SOURCES = {
+              "阿里巴巴": (
+                  "https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/master/rule/Surge/Alibaba/Alibaba.list",
+                  "223.5.5.5",
+              ),
+              "支付宝": (
+                  "https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/master/rule/Surge/AliPay/AliPay.list",
+                  "223.5.5.5",
+              ),
+              "腾讯": (
+                  "https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/master/rule/Surge/Tencent/Tencent_Domain.list",
+                  "119.29.29.29",
+              ),
+              "京东": (
+                  "https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/master/rule/Surge/JingDong/JingDong.list",
+                  "119.29.29.29",
+              ),
+              "美团": (
+                  "https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/master/rule/Surge/MeiTuan/MeiTuan.list",
+                  "119.29.29.29",
+              ),
+              "苹果": (
+                  "https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/master/rule/Surge/Apple/Apple.list",
+                  "server:syslib",
+              ),
+              "抖音": (
+                  "https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/master/rule/Surge/DouYin/DouYin.list",
+                  "server:syslib",
+              ),
+              "快手": (
+                  "https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/master/rule/Surge/Kuaishou/Kuaishou.list",
+                  "server:syslib",
+              ),
+              "小红书": (
+                  "https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/master/rule/Surge/XiaoHongShu/XiaoHongShu.list",
+                  "server:syslib",
+              ),
+              "饿了么": (
+                  "https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/master/rule/Surge/Eleme/Eleme.list",
+                  "server:syslib",
+              ),
+              "银联": (
+                  "https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/master/rule/Surge/UnionPay/UnionPay.list",
+                  "server:syslib",
+              ),
+          }
+
+          NTP = [
+              "pool.ntp.org",
+              "*.pool.ntp.org",
+              "ntp.*.com",
+              "time.*.com",
+              "ntp?.*.com",
+              "time?.*.com",
+              "time.*.gov",
+          ]
+
+          FIXED_HOST = {
+              "dns.alidns.com",
+              "doh.pub",
+              "*.lan",
+              "*.local",
+              "routerlogin.net",
+              "*.asuscomm.com",
+              "*.wicp.net",
+          }
+
+          def download(url):
+              r = requests.get(
+                  url,
+                  timeout=60,
+                  headers={"User-Agent": "Mozilla/5.0"},
+              )
+              r.raise_for_status()
+              return r.text
+
+          def extract_domains(content):
+              result = []
+
+              for raw in content.splitlines():
+                  line = raw.strip()
+
+                  if not line:
+                      continue
+
+                  if line.startswith("#"):
+                      continue
+
+                  line = line.split("//", 1)[0].strip()
+
+                  m = re.match(
+                      r"^(?:DOMAIN-SUFFIX|DOMAIN)\s*,\s*([^,\s]+)",
+                      line,
+                      re.I,
+                  )
+
+                  if not m:
+                      m = re.match(
+                          r"^(?:HOST|HOST-SUFFIX)\s*,\s*([^,\s]+)",
+                          line,
+                          re.I,
+                      )
+
+                  if not m:
+                      continue
+
+                  domain = m.group(1).strip().lower()
+
+                  if not domain:
+                      continue
+
+                  if domain.startswith("*."):
+                      result.append(domain)
+                  else:
+                      result.append("*." + domain)
+
+              return result
+
+          generated = []
+          seen = set()
+
+          def add(domain, dns):
+              domain = domain.strip()
+
+              if not domain:
+                  return
+
+              key = domain.lower()
+
+              if key in seen:
+                  return
+
+              if key in FIXED_HOST:
+                  return
+
+              seen.add(key)
+              generated.append((domain, dns))
+
+          for name, (url, dns) in SOURCES.items():
+              try:
+                  content = download(url)
+                  domains = extract_domains(content)
+
+                  for domain in domains:
+                      add(domain, dns)
+
+                  print(f"{name}: {len(domains)}")
+
+              except Exception as e:
+                  print(f"WARNING: {name} 获取失败: {e}")
+
+          for domain in NTP:
+              add(domain, "server:syslib")
+
+          if not generated:
+              raise RuntimeError("没有抓取到任何有效域名，停止更新，防止清空配置")
+
+          print(f"最终自动域名数量: {len(generated)}")
+
           text = FILE.read_text(encoding="utf-8")
 
-          # ============================================================
-          # [Host] 固定前置内容
-          # ============================================================
+          lines = text.splitlines()
 
-          fixed_top = [
-              "dns.alidns.com = 223.5.5.5",
-              "doh.pub = 119.29.29.29",
-              "*.lan = server:syslib",
-              "*.local = server:syslib",
-              "routerlogin.net = server:syslib",
-              "*.asuscomm.com = server:syslib",
-              "*.wicp.net = server:syslib",
+          # ==========================================================
+          # 找 [Host]
+          # ==========================================================
+
+          host_start = None
+          host_end = None
+
+          for i, line in enumerate(lines):
+              if line.strip() == "[Host]":
+                  host_start = i
+                  break
+
+          if host_start is None:
+              raise RuntimeError("找不到 [Host]")
+
+          for i in range(host_start + 1, len(lines)):
+              if re.match(r"^\[[^\]]+\]$", lines[i].strip()):
+                  host_end = i
+                  break
+
+          if host_end is None:
+              host_end = len(lines)
+
+          host_lines = lines[host_start + 1:host_end]
+
+          # ==========================================================
+          # 固定 Host 项
+          # ==========================================================
+
+          fixed_domains = {
+              "dns.alidns.com",
+              "doh.pub",
+              "*.lan",
+              "*.local",
+              "routerlogin.net",
+              "*.asuscomm.com",
+              "*.wicp.net",
+          }
+
+          fixed_lines = []
+          comments = []
+
+          for line in host_lines:
+              stripped = line.strip()
+
+              if not stripped:
+                  continue
+
+              if stripped.startswith("#"):
+                  comments.append(line)
+                  continue
+
+              m = re.match(
+                  r"^([^=\s]+)\s*=",
+                  stripped
+              )
+
+              if not m:
+                  comments.append(line)
+                  continue
+
+              domain = m.group(1)
+
+              if domain.lower() in {
+                  x.lower() for x in fixed_domains
+              }:
+                  fixed_lines.append(line)
+
+          # ==========================================================
+          # 保留原 Host 中的注释
+          # 但自动域名全部重新生成
+          # ==========================================================
+
+          # 固定项按原配置中的顺序保留
+          new_host = []
+
+          for line in host_lines:
+              stripped = line.strip()
+
+              if not stripped:
+                  continue
+
+              if stripped.startswith("#"):
+                  new_host.append(line)
+                  continue
+
+              m = re.match(
+                  r"^([^=\s]+)\s*=",
+                  stripped
+              )
+
+              if not m:
+                  new_host.append(line)
+                  continue
+
+              domain = m.group(1)
+
+              if domain.lower() in {
+                  x.lower() for x in fixed_domains
+              }:
+                  new_host.append(line)
+
+          # ==========================================================
+          # 自动生成区域
+          # ==========================================================
+
+          category_last = None
+
+          category_names = {}
+
+          for name, (url, dns) in SOURCES.items():
+              category_names[dns] = category_names.get(dns, [])
+
+          # 按 DNS 分类输出
+          groups = [
+              ("阿里 DNS", "223.5.5.5"),
+              ("腾讯 DNS", "119.29.29.29"),
+              ("系统 DNS", "server:syslib"),
           ]
 
-          # ============================================================
-          # 223.5.5.5
-          # ============================================================
+          # 删除所有原有自动域名之后重新生成
+          # 注释全部来自原配置，固定项也全部保留
 
-          ali_domains = [
-              "*.alibaba.com",
-              "*.taobao.com",
-              "*.tmall.com",
-              "*.goofish.com",
-              "*.alipay.com",
-              "*.alicdn.com",
-              "*.tbcdn.cn",
-              "*.taobaocdn.com",
+          # 先保留原来的固定/注释内容
+          # 然后追加最新自动域名
+
+          # 为避免重复注释，自动区不再增加新的注释
+          for title, dns in groups:
+              for domain, item_dns in generated:
+                  if item_dns != dns:
+                      continue
+
+                  new_host.append(
+                      f"{domain} = {dns}"
+                  )
+
+          # ==========================================================
+          # *.cn 必须最后
+          # ==========================================================
+
+          new_host.append(
+              "*.cn = server:syslib // 中國大陸域名"
+          )
+
+          # Host 完全禁止空行
+          new_host = [
+              line for line in new_host
+              if line.strip()
           ]
 
-          # ============================================================
-          # 119.29.29.29
-          # ============================================================
+          lines = (
+              lines[:host_start + 1]
+              + new_host
+              + lines[host_end:]
+          )
 
-          tencent_domains = [
-              "*.qq.com",
-              "*.qqmail.com",
-              "*.wechat.com",
-              "*.weixin.qq.com",
-              "*.tenpay.com",
-              "*.mch.weixin.qq.com",
-              "*.wx.tenpay.com",
-              "*.qpic.cn",
-              "*.jd.com",
-              "*.jdpay.com",
-              "*.360buyimg.com",
-              "*.meituan.com",
-              "*.meituan.net",
-              "*.meituanpay.com",
-              "*.dianping.com",
+          # ==========================================================
+          # always-real-ip
+          # ==========================================================
+
+          real_index = None
+
+          for i, line in enumerate(lines):
+              if re.match(
+                  r"^\s*always-real-ip\s*=",
+                  line,
+                  re.I
+              ):
+                  real_index = i
+                  break
+
+          if real_index is None:
+              raise RuntimeError("找不到 always-real-ip")
+
+          original_real = lines[real_index]
+
+          prefix, value = original_real.split("=", 1)
+
+          value = value.strip()
+
+          if value.startswith("%INSERT%"):
+              value = value[len("%INSERT%"):].strip()
+
+          old_items = [
+              x.strip()
+              for x in value.split(",")
+              if x.strip()
           ]
 
-          # ============================================================
-          # server:syslib
-          # ============================================================
+          # 固定/手工 always-real-ip
+          # 删除本次自动生成范围之外的旧公司域名方式：
+          # 根据当前自动域名来源重新构造自动项。
+          #
+          # 保留原来的固定手工项。
 
-          syslib_groups = {
-              "Apple": [
-                  "*.apple.com",
-                  "*.icloud.com",
-                  "*.apps.apple.com",
-                  "*.appleid.apple.com",
-                  "*.push.apple.com",
-                  "*.cdn-apple.com",
-                  "*.mzstatic.com",
-                  "*.apple-cloudkit.com",
-              ],
-              "抖音": [
-                  "*.douyin.com",
-                  "*.douyincdn.com",
-                  "*.douyinpic.com",
-                  "*.douyinstatic.com",
-                  "*.douyinvod.com",
-                  "*.amemv.com",
-                  "*.snssdk.com",
-                  "*.pstatp.com",
-              ],
-              "快手": [
-                  "*.kuaishou.com",
-                  "*.gifshow.com",
-                  "*.yximgs.com",
-                  "*.kwai.com",
-              ],
-              "小红书": [
-                  "*.xiaohongshu.com",
-                  "*.xhslink.com",
-                  "*.xhslink.cn",
-              ],
-              "饿了么": [
-                  "*.ele.me",
-                  "*.elmapp.com",
-                  "*.eleimg.com",
-              ],
-              "银行": [
-                  "*.icbc.com.cn",
-                  "*.abchina.com",
-                  "*.boc.cn",
-                  "*.ccb.com",
-                  "*.bankcomm.com",
-                  "*.cmbchina.com",
-                  "*.cmbc.com.cn",
-                  "*.psbc.com",
-                  "*.citicbank.com",
-                  "*.pingan.com",
-              ],
-              "数字人民币": [
-                  "*.ecny.icbc.com",
-                  "*.ecny.abchina.com",
-                  "*.ecny.boc.cn",
-                  "*.ecny.ccb.com",
-              ],
-              "银联": [
-                  "*.unionpay.com",
-                  "*.chinapay.com",
-                  "*.95516.com",
-                  "*.unionpayintl.com",
-                  "*.unionpaysecure.com",
-                  "*.online.unionpay.com",
-              ],
-              "NTP": [
+          generated_domains = {
+              domain.lower()
+              for domain, _ in generated
+          }
+
+          # 当前来源中所有旧域名无法从文本直接判断是不是自动生成。
+          # 因此按现有分类中的历史域名进行清理。
+          #
+          # 清理这些公司域名的旧版本：
+          company_suffixes = [
+              ".alibaba.com",
+              ".taobao.com",
+              ".tmall.com",
+              ".goofish.com",
+              ".alipay.com",
+              ".alicdn.com",
+              ".tbcdn.cn",
+              ".taobaocdn.com",
+              ".qq.com",
+              ".qqmail.com",
+              ".wechat.com",
+              ".tenpay.com",
+              ".qpic.cn",
+              ".jd.com",
+              ".jdmall.com",
+              ".jdpay.com",
+              ".360buyimg.com",
+              ".jdcloud.com",
+              ".jingdong.com",
+              ".jdjr.com",
+              ".meituan.com",
+              ".meituan.net",
+              ".meituanpay.com",
+              ".meituanwaimai.com",
+              ".dianping.com",
+              ".apple.com",
+              ".icloud.com",
+              ".apps.apple.com",
+              ".appleid.apple.com",
+              ".cdn-apple.com",
+              ".mzstatic.com",
+              ".push.apple.com",
+              ".apple-cloudkit.com",
+              ".douyin.com",
+              ".douyincdn.com",
+              ".douyinpic.com",
+              ".douyinstatic.com",
+              ".douyinvod.com",
+              ".amemv.com",
+              ".snssdk.com",
+              ".pstatp.com",
+              ".kuaishou.com",
+              ".gifshow.com",
+              ".yximgs.com",
+              ".kwai.com",
+              ".xiaohongshu.com",
+              ".xhslink.com",
+              ".xhslink.cn",
+              ".ele.me",
+              ".elmapp.com",
+              ".eleimg.com",
+              ".elmcdn.com",
+              ".unionpay.com",
+              ".chinapay.com",
+              ".95516.com",
+              ".unionpayintl.com",
+              ".unionpaysecure.com",
+              ".online.unionpay.com",
+          ]
+
+          def is_auto_old(item):
+              x = item.lower()
+
+              if x in {
+                  "*.lan",
+                  "*.cn",
+                  "*.direct",
+                  "*.asuscomm.com",
+                  "*.wicp.net",
+              }:
+                  return False
+
+              for suffix in company_suffixes:
+                  if x.endswith(suffix):
+                      return True
+
+              if x in {
                   "pool.ntp.org",
                   "*.pool.ntp.org",
                   "ntp.*.com",
                   "time.*.com",
-              ],
-          }
+                  "ntp?.*.com",
+                  "time?.*.com",
+                  "time.*.gov",
+              }:
+                  return True
 
-          # ============================================================
-          # 生成域名
-          # ============================================================
+              return False
 
-          used = set()
-          generated = []
-          generated_domains = []
+          manual_real = []
 
-          def add_group(name, domains, dns):
-              for domain in domains:
-                  domain = domain.strip()
-                  if not domain:
-                      continue
+          for item in old_items:
+              if is_auto_old(item):
+                  continue
 
-                  key = domain.lower()
+              if item.lower() in {
+                  x.lower() for x in generated_domains
+              }:
+                  continue
 
-                  if key in used:
-                      continue
+              manual_real.append(item)
 
-                  used.add(key)
-                  generated_domains.append(domain)
-                  generated.append(f"{domain} = {dns}")
+          final_real = []
 
-          add_group("阿里 DNS", ali_domains, "223.5.5.5")
-          add_group("腾讯 DNS", tencent_domains, "119.29.29.29")
-
-          for name, domains in syslib_groups.items():
-              add_group(name, domains, "server:syslib")
-
-          # ============================================================
-          # *.cn 永远最后
-          # ============================================================
-
-          generated_domains.append("*.cn")
-
-          # ============================================================
-          # 生成 [Host]
-          # 不留空行
-          # ============================================================
-
-          host_lines = fixed_top + generated
-
-          host_block = "[Host]\n" + "\n".join(host_lines)
-
-          # ============================================================
-          # 替换 [Host]
-          # ============================================================
-
-          host_pattern = r"\[Host\]\n.*?(?=\n\[[A-Za-z])"
-
-          text, host_count = re.subn(
-              host_pattern,
-              host_block,
-              text,
-              count=1,
-              flags=re.S
-          )
-
-          if host_count != 1:
-              raise RuntimeError(
-                  "没有找到 [Host] 区域，停止修改"
-              )
-
-          # ============================================================
-          # always-real-ip
-          #
-          # 保留原有手写内容。
-          # 自动生成域名使用特殊标记维护。
-          # ============================================================
-
-          auto_start = "# AUTO-HOST-REAL-IP-START"
-          auto_end = "# AUTO-HOST-REAL-IP-END"
-
-          auto_domains = generated_domains
-
-          # 从原 always-real-ip 中删除旧自动区域
-          text = re.sub(
-              rf"\s*{re.escape(auto_start)}.*?{re.escape(auto_end)}",
-              "",
-              text,
-              flags=re.S
-          )
-
-          # 找到 always-real-ip
-          match = re.search(
-              r"^always-real-ip\s*=\s*(.*)$",
-              text,
-              flags=re.M
-          )
-
-          if not match:
-              raise RuntimeError(
-                  "没有找到 always-real-ip"
-              )
-
-          current = match.group(1).strip()
-
-          # 去除旧的自动域名
-          current_items = [
-              x.strip()
-              for x in current.split(",")
-              if x.strip()
-          ]
-
-          auto_keys = {
-              x.lower()
-              for x in auto_domains
-          }
-
-          manual_items = []
-
-          for item in current_items:
+          def append_unique(item):
               key = item.lower()
 
-              if key in auto_keys:
+              if key not in {
+                  x.lower() for x in final_real
+              }:
+                  final_real.append(item)
+
+          # 保持原来的 %INSERT%
+          append_unique("%INSERT%")
+
+          # 固定顺序
+          append_unique("*.lan")
+          append_unique("*.cn")
+
+          # 原有手工内容
+          for item in manual_real:
+              if item.lower() in {
+                  "%insert%",
+                  "*.lan",
+                  "*.cn",
+              }:
                   continue
 
-              if key.startswith("#"):
-                  continue
+              append_unique(item)
 
-              manual_items.append(item)
+          # 最新自动域名
+          for domain, _ in generated:
+              append_unique(domain)
 
-          # 去重
-          final_items = []
-          seen = set()
-
-          for item in manual_items + auto_domains:
-              key = item.lower()
-
-              if key in seen:
-                  continue
-
-              seen.add(key)
-              final_items.append(item)
-
-          new_real_ip = (
+          lines[real_index] = (
               "always-real-ip = "
-              + ", ".join(final_items)
-          )
-
-          text = re.sub(
-              r"^always-real-ip\s*=.*$",
-              new_real_ip,
-              text,
-              count=1,
-              flags=re.M
-          )
-
-          # ============================================================
-          # 清理 Host 区域中的连续空行
-          # ============================================================
-
-          text = re.sub(
-              r"(\[Host\][\s\S]*?)(?:\n{2,})(?=\[[A-Za-z])",
-              lambda m: m.group(1).rstrip("\n") + "\n",
-              text,
-              count=1
+              + ", ".join(final_real)
           )
 
           FILE.write_text(
-              text,
+              "\n".join(lines) + "\n",
               encoding="utf-8"
           )
 
-          print("======================================")
           print("SurgeGo.conf 更新完成")
-          print(f"自动 Host 域名: {len(generated_domains) - 1}")
-          print("223.5.5.5: 阿里系")
-          print("119.29.29.29: 腾讯系")
-          print("server:syslib: 其他")
-          print("NTP: 保留")
-          print("Google: 删除")
-          print("Telegram: 删除")
-          print("Microsoft: 删除")
-          print("*.cn: 最后")
-          print("Host: 不留空行")
-          print("======================================")
+          PY
+
+      - name: Check config
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          text = Path("SurgeGo.conf").read_text(encoding="utf-8")
+
+          m = re.search(
+              r"\[Host\](.*?)(?=^\[[^\]]+\]|\Z)",
+              text,
+              re.S | re.M
+          )
+
+          if not m:
+              raise SystemExit("Host 区域不存在")
+
+          host = m.group(1)
+
+          if any(not x.strip() for x in host.splitlines()):
+              raise SystemExit("[Host] 存在空行")
+
+          if not host.rstrip().endswith(
+              "*.cn = server:syslib // 中國大陸域名"
+          ):
+              raise SystemExit("[Host] *.cn 不是最后一行")
+
+          print("[Host] 检查通过")
           PY
 
       - name: Show changes
@@ -338,10 +580,11 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
           git add SurgeGo.conf
 
           if git diff --cached --quiet; then
-            echo "没有变化，不提交"
+            echo "没有变化"
             exit 0
           fi
 
