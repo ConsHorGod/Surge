@@ -1,0 +1,298 @@
+name: Update Surge Host
+
+on:
+  schedule:
+    - cron: "0 22 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Update [Host]
+        run: |
+          python3 <<'PY'
+          from pathlib import Path
+          import re
+
+          FILE = Path("SurgeGo.conf")
+
+          text = FILE.read_text(encoding="utf-8")
+
+          # ============================================================
+          # 固定在 [Host] 最前面的内容
+          # ============================================================
+
+          fixed_top = [
+              "dns.alidns.com = 223.5.5.5",
+              "doh.pub = 119.29.29.29",
+              "*.lan = server:syslib",
+              "*.local = server:syslib",
+              "routerlogin.net = server:syslib",
+              "*.asuscomm.com = server:syslib",
+              "*.wicp.net = server:syslib",
+          ]
+
+          # ============================================================
+          # 最适合使用阿里 DNS
+          # ============================================================
+
+          ali_domains = [
+              "*.alibaba.com",
+              "*.taobao.com",
+              "*.tmall.com",
+              "*.goofish.com",
+              "*.alipay.com",
+              "*.alicdn.com",
+              "*.tbcdn.cn",
+              "*.taobaocdn.com",
+          ]
+
+          # ============================================================
+          # 最适合使用腾讯 DNS
+          # ============================================================
+
+          tencent_domains = [
+              "*.qq.com",
+              "*.qqmail.com",
+              "*.wechat.com",
+              "*.weixin.qq.com",
+              "*.tenpay.com",
+              "*.mch.weixin.qq.com",
+              "*.wx.tenpay.com",
+              "*.qpic.cn",
+              "*.jd.com",
+              "*.jdpay.com",
+              "*.360buyimg.com",
+              "*.meituan.com",
+              "*.meituan.net",
+              "*.meituanpay.com",
+              "*.dianping.com",
+          ]
+
+          # ============================================================
+          # 其他使用系统 DNS
+          # ============================================================
+
+          syslib_groups = {
+              "Apple": [
+                  "*.apple.com",
+                  "*.icloud.com",
+                  "*.apps.apple.com",
+                  "*.appleid.apple.com",
+                  "*.push.apple.com",
+                  "*.cdn-apple.com",
+                  "*.mzstatic.com",
+                  "*.apple-cloudkit.com",
+              ],
+
+              "抖音": [
+                  "*.douyin.com",
+                  "*.douyincdn.com",
+                  "*.douyinpic.com",
+                  "*.douyinstatic.com",
+                  "*.douyinvod.com",
+                  "*.amemv.com",
+                  "*.amemv.com",
+                  "*.snssdk.com",
+                  "*.pstatp.com",
+              ],
+
+              "快手": [
+                  "*.kuaishou.com",
+                  "*.gifshow.com",
+                  "*.yximgs.com",
+                  "*.kwai.com",
+              ],
+
+              "小红书": [
+                  "*.xiaohongshu.com",
+                  "*.xhslink.com",
+                  "*.xhslink.cn",
+              ],
+
+              "饿了么": [
+                  "*.ele.me",
+                  "*.elmapp.com",
+                  "*.eleimg.com",
+              ],
+
+              "银行": [
+                  "*.icbc.com.cn",
+                  "*.abchina.com",
+                  "*.boc.cn",
+                  "*.ccb.com",
+                  "*.bankcomm.com",
+                  "*.cmbchina.com",
+                  "*.cmbc.com.cn",
+                  "*.psbc.com",
+                  "*.citicbank.com",
+                  "*.pingan.com",
+              ],
+
+              "数字人民币": [
+                  "*.ecny.icbc.com",
+                  "*.ecny.abchina.com",
+                  "*.ecny.boc.cn",
+                  "*.ecny.ccb.com",
+              ],
+
+              "银联": [
+                  "*.unionpay.com",
+                  "*.chinapay.com",
+                  "*.95516.com",
+                  "*.unionpayintl.com",
+                  "*.unionpaysecure.com",
+                  "*.online.unionpay.com",
+              ],
+
+              "NTP": [
+                  "pool.ntp.org",
+                  "*.pool.ntp.org",
+                  "ntp.*.com",
+                  "time.*.com",
+              ],
+          }
+
+          # ============================================================
+          # 去重
+          # ============================================================
+
+          used = set()
+          generated = []
+
+          def add_group(name, domains, dns):
+              items = []
+
+              for domain in domains:
+                  domain = domain.strip()
+
+                  if not domain:
+                      continue
+
+                  key = domain.lower()
+
+                  if key in used:
+                      continue
+
+                  used.add(key)
+
+                  items.append(f"{domain} = {dns}")
+
+              if items:
+                  generated.append(f"# {name}")
+                  generated.extend(items)
+                  generated.append("")
+
+          # ============================================================
+          # 生成阿里 DNS
+          # ============================================================
+
+          add_group(
+              "阿里 DNS",
+              ali_domains,
+              "223.5.5.5"
+          )
+
+          # ============================================================
+          # 生成腾讯 DNS
+          # ============================================================
+
+          add_group(
+              "腾讯 DNS",
+              tencent_domains,
+              "119.29.29.29"
+          )
+
+          # ============================================================
+          # 生成系统 DNS
+          # ============================================================
+
+          for name, domains in syslib_groups.items():
+              add_group(
+                  name,
+                  domains,
+                  "server:syslib"
+              )
+
+          # ============================================================
+          # *.cn 永远放最后
+          # ============================================================
+
+          generated.append("*.cn = server:syslib")
+
+          # ============================================================
+          # 生成新的 [Host]
+          # ============================================================
+
+          host_block = (
+              "[Host]\n"
+              + "\n".join(fixed_top)
+              + "\n\n"
+              + "\n".join(generated).rstrip()
+              + "\n"
+          )
+
+          # ============================================================
+          # 只替换 [Host] 到下一个 [Section]
+          # ============================================================
+
+          pattern = r"\[Host\]\n.*?(?=\n\[[A-Za-z])"
+
+          new_text, count = re.subn(
+              pattern,
+              host_block.rstrip("\n"),
+              text,
+              count=1,
+              flags=re.S,
+          )
+
+          if count != 1:
+              raise RuntimeError(
+                  "没有找到 [Host] 区域，停止修改，防止误改配置"
+              )
+
+          FILE.write_text(
+              new_text,
+              encoding="utf-8"
+          )
+
+          print("======================================")
+          print("Surge [Host] 更新完成")
+          print(f"自动域名数量: {len(used)}")
+          print("阿里 DNS: 223.5.5.5")
+          print("腾讯 DNS: 119.29.29.29")
+          print("其他: server:syslib")
+          print("NTP: 已保留")
+          print("Google: 已删除")
+          print("Telegram: 已删除")
+          print("Microsoft: 已删除")
+          print("*.cn: 固定最后")
+          print("======================================")
+          PY
+
+      - name: Show changes
+        run: |
+          git diff -- SurgeGo.conf
+
+      - name: Commit and Push
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git add SurgeGo.conf
+
+          if git diff --cached --quiet; then
+            echo "没有变化，不提交"
+            exit 0
+          fi
+
+          git commit -m "Auto update Surge Host"
+          git push
