@@ -1,5 +1,6 @@
 #!name=路由器接管模式
 #!desc=修改Surge接入手機路由器模式
+
 [General]
 compatibility-mode = 1
 # 0: Auto,默認,最均衡(標準接管模式(即:TUN增強模式)
