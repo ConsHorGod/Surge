@@ -1,0 +1,12 @@
+#!name=網絡接管模式
+#!desc=修改Surge對網絡接管的模式
+
+[General]
+# 𖦝𖦝𖦝𖦝️𖦝️𖦝️𖦝𖦝𖦝𖦝️接管所有網絡服務(總開關…可能會對系統造成嚴重副作用)
+include-all-networks = true
+# 𖦝𖦝𖦝𖦝️𖦝️𖦝️𖦝𖦝𖦝𖦝️接管本地局域網絡
+include-local-networks = false
+# 𖦝𖦝𖦝𖦝️𖦝️𖦝️𖦝𖦝𖦝𖦝️接管系統通知
+include-apns = true
+# 𖦝𖦝𖦝𖦝️𖦝️𖦝️𖦝𖦝𖦝𖦝️接管蜂窩數據網絡
+include-cellular-services = true
