@@ -1,0 +1,6 @@
+#!name=子網設置覆蓋
+#!desc=連接對應Wi-Fi(SSID)暫時停止Surge運行
+
+[SSID Setting]
+SSID:ASUSWiFi* suspend=true
+SSID:0135-4* suspend=true
