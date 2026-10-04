@@ -1,0 +1,8 @@
+#!name=WiFi直连
+#!desc=連接Wi-Fi規則
+
+[Rule]
+#RULE-SET,https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/refs/heads/master/rule/Surge/Telegram/Telegram_Resolve.list,飛機電報,extended-matching,update-interval=10800,no-resolve // Telegram
+#RULE-SET,https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/master/rule/Surge/TikTok/TikTok.list,國際抖音,extended-matching,update-interval=10800,no-resolve // TikTok
+SUBNET,SSID:0135-4*,DIRECT // 北村直連
+SUBNET,SSID:ASUSWiFi*,DIRECT // 奥园直連
