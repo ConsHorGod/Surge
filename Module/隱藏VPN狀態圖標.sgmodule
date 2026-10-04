@@ -1,0 +1,5 @@
+#!name=隐藏状态栏VPN图标
+#!desc=運行此模塊有可能導致其它網絡問題
+
+[General]
+hide-vpn-icon=true
