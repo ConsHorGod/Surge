@@ -1,0 +1,5 @@
+#!name=[MitM]排除域名
+#!desc=不進入中間人攻擊拆包修改名單
+
+[MITM]
+hostname = -*.apple.com, -*.icloud.com, -*.mzstatic.com, -*.facebook.com, -*.instagram.com, -*.twitter.com, -*dropbox*, -*apple*, -*.amazonaws.com
