@@ -1,0 +1,8 @@
+#!name=ipv6開關模塊
+#!desc=接管ipv6流量
+
+[General]
+# 𖦝𖦝𖦝𖦝️𖦝️𖦝️𖦝𖦝𖦝𖦝️ipv6_dns查詢(true執行,false禁止)
+ipv6 = true
+# 𖦝𖦝𖦝𖦝️𖦝️𖦝️𖦝𖦝𖦝𖦝️允許VIF處理ipv6請求(disable禁止,always總是,auto自動)
+ipv6-vif = always
