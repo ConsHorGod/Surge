@@ -1,4 +1,6 @@
 DOMAIN,msmp.abchina.com.cn // 排除農業銀行
+DOMAIN-KEYWORD,bds.snssdk.com // 抖音
+DOMAIN-KEYWORD,p3.pstatp.com // 抖音
 DOMAIN-SUFFIX,px.effirst.com // 岳鹰监控
 DOMAIN,stun.services.mozilla.com // 未知域名
 DOMAIN-SUFFIX,app-ads-services.com // Google廣告
